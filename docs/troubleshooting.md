@@ -1,73 +1,35 @@
-# 超长工单编号的排查与回归
+# 问题排查记录
 
-本案例来自本项目开发时发现的输入处理缺陷。使用模拟请求在本地验证，未发生在生产系统中。
+以下问题来自本项目本地开发或故障注入，使用模拟数据。
 
-## 现象与复现
+## 超长工单编号
 
-使用正常提单账号登录后，请求 `/tickets/` 后接5000位数字。预期是统一的404错误，实际初版在进入视图函数前就抛出了 `ValueError`，无法按约定返回错误。
+**现象：** 请求 `/tickets/` 后接5000位数字，初版抛出 `ValueError`，未返回约定的404。
 
-正常工单编号可以查询，因此排查先比较正常编号与超长编号的请求路径，而不是修改数据库或关闭参数限制。
+**原因：** Flask 整数路由在进入视图前先转换编号，超过 Python 的整数转换位数限制，视图内的校验来不及执行。
 
-## 原因
+**修复：** 路由接收字符串，先校验长度、ASCII 数字和正整数64位范围，再转换和查库；无效编号返回404。
 
-初版使用 Flask 的整数路由转换器。Werkzeug 在路由匹配阶段先把路径转换为 Python 整数，超过当前解释器的整数转换位数限制后抛出异常。视图内即便增加 SQLite 整数范围检查，也来不及处理这个异常。
+**回归：** [test_tickets.py](../tests/test_tickets.py) 中的 `test_ticket_path_beyond_python_integer_digit_limit_returns_404`，并覆盖正常编号、边界与访问权限。
 
-## 修复
+## 自然问法漏检
 
-查询路由先接收字符串，再检查编号长度、ASCII 数字格式和正整数64位范围，检查通过后才转换为整数并查询数据库。超出范围的编号统一按不存在处理。
+**现象：** 18题开发回归首次17题通过，“模型调用连接超时，还能查看哪些本地资料”未命中 `model-timeout`。
 
-修复没有扩大 Python 的整数转换上限，也没有把输入强行截断。
+**原因：** 问句产生过多查询意图词，文档有效词覆盖率低于0.5门槛。
 
-## 回归证据
+**修复：** 增加通用疑问词规范化，保留阈值，并加入不同表达及未知主题回归。
 
-`tests/test_tickets.py` 中的 `test_ticket_path_beyond_python_integer_digit_limit_returns_404` 专门保留5000位数字路径；其他用例覆盖正常工单读取、不同用户访问隔离，以及 SQLite 边界附近的编号。
+**回归：** [test_knowledge.py](../tests/test_knowledge.py) 和 `scripts/evaluate_knowledge.py`，18题通过。该题集参与过调整，用作开发回归。
 
-按 README 设置 `$python` 和新的 `$testTemp` 后，可以只运行相关编号用例：
+## 模型 HTTP 中断
 
-```powershell
-& $python -m pytest -q tests/test_tickets.py -k 'ids_return_404 or integer_digit_limit' --basetemp $testTemp
-```
+**现象：** 模拟连接阶段 `BadStatusLine` 或读取阶段 `IncompleteRead` 时，初版返回500，调用账本停在 reserved。
 
-最终全套测试通过。另有 SQLite 触发器故障注入用例，用于验证写入失败、错误隐藏、零新增和恢复后的成功写入；那一项是明确的模拟故障演练，不是生产事故记录。
+**原因：** 原捕获范围为 `TimeoutError`、`URLError`、`OSError`，遗漏 `http.client.HTTPException`。
 
-## 排查中的另一个发现
+**修复：** 在外部调用边界捕获该异常，返回502 `MODEL_UPSTREAM_ERROR`，将账本记为 failed，保留预算预占且不重试。
 
-真实启动验证还发现初始化命令缺少 Flask 应用上下文，会报 `Working outside of application context`。已给命令补上 `with_appcontext`，并增加 `tests/test_cli.py`，通过实际命令入口验证初始化与演示账号准备，避免仅测内部函数而漏掉启动步骤。
+**回归：** [test_model_answer.py](../tests/test_model_answer.py) 分别注入打开连接和读取中断，检查错误码、失败记录、只调用一次，以及响应和日志不含异常携带的敏感内容。
 
-## 按请求编号定位当前接口失败
-
-收到错误响应时，先保留响应头的 `X-Request-ID`。后台日志中的 `request_id=同一编号` 可以关联这次请求的完成记录、内部异常和成功状态更新，避免把同一用户连续两次请求混在一起。
-
-请求完成记录包含方法、路径、状态码、处理耗时和已识别的用户编号。路径最多记录256个字符，并将控制字符转义；不记录查询串、请求体、密码、CSRF 令牌或 Cookie。处理耗时是单次排查数据，不作为性能指标。
-
-自动化验证见 `tests/test_observability.py`，通过模拟数据库失败核对响应编号与错误日志、完成日志一致，并检查敏感请求输入不会被写入这些日志。
-
-## 提交失败回滚的可重复演练
-
-`tests/test_commit_failure.py` 使用独立测试库、延迟外键约束和 AFTER UPDATE 触发器，制造 SQL 更新已执行、最终 COMMIT 失败的情况。它与语句执行阶段的 `RAISE(ABORT)` 故障用例分别保留，验证两个失败时机。
-
-预期为通用500、原工单整行不变、触发器附带写入也被回滚，且没有成功状态日志。测试移除故障触发器后重试，同一操作应成功，并只记录一次成功状态更新。这是人为注入的模拟故障，不是生产事故。
-
-按 README 准备解释器与新的临时目录后运行：
-
-```powershell
-& $python -m pytest -q tests/test_commit_failure.py tests/test_observability.py --basetemp $testTemp
-```
-
-## 固定问题暴露自然问法漏检
-
-本轮本地检索开发评测包含12个可答和6个无答案问题。首次有17项符合预期，问题“模型调用连接超时，还能查看哪些本地资料”未找到预期文档 `model-timeout`；其他11个可答问题命中、6个无答案问题为空，来源核对没有发现错误。
-
-检查词法规范化后发现，该问法产生14个有效双字词，其中许多来自疑问和查询意图表达，目标文档只覆盖4个，低于现有0.5覆盖门槛。修复补充“哪些、能否、是否、怎样、还能、查看”等通用意图词，不修改阈值、不硬编码该问题或答案；同时加入不同自然问法、未知主题和相似错误码回归。
-
-修复后固定18题全部符合预期，12次来源核对通过。这个问题集参与了开发调整，结果只作为开发回归证据，不能包装为独立测试准确率。实现仍是小语料词法基线，同义表达或混合主题仍可能漏检或误匹配。
-
-重现入口为 `scripts/evaluate_knowledge.py` 和 `tests/test_knowledge.py`；具体运行方法见[知识模块说明](knowledge.md)。这项是实际开发发现，不是生产事故，也未经过真实模型生成。
-
-## 模型 HTTP 中断的错误分类与账本收尾
-
-真实模型首次接通后，检查异常路径发现：原实现只捕获 `TimeoutError`、`URLError` 和 `OSError`。模拟连接阶段的 `BadStatusLine` 或读取阶段的 `IncompleteRead` 时，异常逃逸至通用500处理器，已经预占的调用记录仍为 reserved。这两类异常继承 `http.client.HTTPException`，不属于原捕获范围；该故障是本地人为注入，首次真实请求本身成功。
-
-修复在外部 HTTP 调用边界补充捕获，返回502 `MODEL_UPSTREAM_ERROR`，把记录收尾为 failed，并保留0.5元预占，不自动重试。不会把异常携带的响应片段写入日志或返回给调用方。另将提供方401和402分别映射为认证失败与余额不足，避免只提示稍后重试。
-
-`tests/test_model_answer.py` 的 `test_interrupted_provider_http_is_safe_and_finishes_budget_record` 分别在打开连接、读取响应时注入异常，核对错误码、账本、调用一次，以及日志和响应不含假密钥及问题。与提供方错误分类用例的专项验证为 `9 passed, 44 deselected in 2.49s`，未调用外部模型。
+接口问题可用响应头 `X-Request-ID` 关联后台日志。完整测试结果见[验证记录](verification.md)。
