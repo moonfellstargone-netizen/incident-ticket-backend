@@ -1,5 +1,6 @@
 """Application factory for the first ticket workflow."""
 
+import logging
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from flask import Flask
 
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
+    app.logger.setLevel(logging.INFO)
     default_database = Path(app.instance_path) / "tickets.sqlite3"
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("TICKET_SECRET_KEY"),

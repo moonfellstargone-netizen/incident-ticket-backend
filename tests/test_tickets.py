@@ -9,7 +9,10 @@ from ticket_backend.db import get_db, init_db
 
 
 VALID_TICKET = {"title": "接口请求失败", "description": "模拟故障：请求返回错误，需要人工排查。"}
-TICKET_FIELDS = {"id", "title", "description", "creator_id", "status", "created_at"}
+TICKET_FIELDS = {
+    "id", "title", "description", "creator_id", "status", "created_at",
+    "resolution", "resolved_by",
+}
 
 
 def ticket_count(app):
@@ -36,6 +39,8 @@ def test_create_persists_trimmed_ticket_and_get_returns_same_data(
     assert ticket["description"] == "模拟请求失败，待排查。"
     assert ticket["creator_id"] == user_ids["submitter_a"]
     assert ticket["status"] == "pending"
+    assert ticket["resolution"] is None
+    assert ticket["resolved_by"] is None
     assert isinstance(ticket["created_at"], str)
     datetime.fromisoformat(ticket["created_at"].replace("Z", "+00:00"))
 
