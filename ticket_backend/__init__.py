@@ -38,9 +38,10 @@ def create_app(test_config=None):
         raise ValueError("DATABASE must point to a SQLite file.")
     app.config["DATABASE"] = str(Path(database).expanduser().resolve())
 
-    from . import auth, db, errors, tickets
+    from . import auth, db, errors, observability, tickets
 
     db.init_app(app)
+    observability.init_app(app)
     errors.init_app(app)
     app.register_blueprint(auth.bp)
     app.register_blueprint(tickets.bp)

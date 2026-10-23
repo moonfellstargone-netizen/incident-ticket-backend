@@ -15,6 +15,7 @@
 - 创建人、初始状态和时间由服务端确定，拒绝请求中的额外字段。
 - 校验字符串类型、空白、长度和编码；请求失败时返回统一 JSON 错误。
 - 状态更新提交成功后记录工单、操作人和前后状态，不在这条日志中记录处理文本。
+- 每个请求由服务端生成编号，通过响应头与请求完成、异常、状态更新日志关联；响应设置 `Cache-Control: no-store`。
 - 使用独立临时数据库测试正常流程、越权、错误输入、CSRF、竞争更新及数据库写入失败恢复。
 
 完整状态审计历史、知识检索、模型接入、持续集成和公网部署暂不做。当前状态日志不等于可查询的审计历史。
@@ -23,11 +24,26 @@
 
 当前在 Windows、Python 3.13.9、Flask 3.1.2、SQLite 3.51.0 和 pytest 8.4.2 上验证。依赖清单见 [requirements.txt](requirements.txt) 和 [requirements-dev.txt](requirements-dev.txt)；本次使用已有环境，没有执行依赖安装。
 
-先在项目根目录打开 PowerShell。下面的解释器位置适用于本次验证使用的 Anaconda 安装；如果位置不同，只调整 `$python`，或在已激活的环境中设为 `'python'`。
+先在项目根目录打开 PowerShell，并选择可用的 Python 解释器。本次验证使用下面的 Anaconda 安装路径；在其他电脑上，请将 `$python` 改成实际解释器路径，或在已有可用环境中设为 `'python'`。如果 `python` 打开 Microsoft Store，需直接指定解释器路径。
 
 ```powershell
 $python = Join-Path $env:LOCALAPPDATA 'anaconda3\python.exe'
 & $python --version
+```
+
+已有上述依赖时，可以直接执行后面的初始化。首次在新环境复现时，先用选定的解释器创建项目内虚拟环境并安装依赖，再继续；下面是复现说明，本次开发未执行环境创建或依赖安装：
+
+```powershell
+& $python -m venv .venv
+if ($LASTEXITCODE -ne 0) { throw '虚拟环境创建失败，请检查选用的 Python。' }
+$python = Join-Path (Get-Location) '.venv\Scripts\python.exe'
+& $python -m pip install -r requirements-dev.txt
+if ($LASTEXITCODE -ne 0) { throw '依赖安装失败，请先检查错误信息。' }
+```
+
+直接使用虚拟环境中的解释器，无需运行激活脚本或更改执行策略。已完成依赖准备后，初始化并启动：
+
+```powershell
 $env:TICKET_SECRET_KEY = (& $python -c "import secrets; print(secrets.token_hex(32))").Trim()
 $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 & $python -m flask --app ticket_backend init-db
@@ -51,17 +67,19 @@ $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 
 ## 运行测试
 
-在项目根目录使用同一个 `$python` 解释器。下面为每次运行生成新的临时目录，规避当前 Windows 默认 pytest 临时目录的权限问题。
+在项目根目录使用同一个 `$python` 解释器。下面为每次运行生成新的临时目录，规避当前 Windows 默认 pytest 临时目录的权限问题，并保存 pytest 内置的 JUnit XML 结果，无需额外报告插件。
 
 ```powershell
 New-Item -ItemType Directory -Force 'tests\.pytest-tmp' | Out-Null
-$testTemp = Join-Path (Get-Location) ('tests\.pytest-tmp\run-' + [guid]::NewGuid().ToString('N'))
-& $python -m pytest -q --basetemp $testTemp
+$runId = [guid]::NewGuid().ToString('N')
+$testTemp = Join-Path (Get-Location) ('tests\.pytest-tmp\run-' + $runId)
+$testReport = Join-Path (Get-Location) ('test-results\pytest-' + $runId + '.xml')
+& $python -m pytest -q --basetemp $testTemp --junitxml $testReport
 ```
 
-测试不会使用开发数据库；测试配置缺少独立数据库路径时会拒绝启动。临时目录、数据库、日志和本地配置均被 Git 忽略。pytest 会管理 `--basetemp` 指定的目录，请保留上述新建随机目录的方式。
+测试不会使用开发数据库；测试配置缺少独立数据库路径时会拒绝启动。临时目录、数据库、测试结果、日志和本地配置均被 Git 忽略。pytest 会管理 `--basetemp` 指定的目录，请保留上述新建随机目录的方式。
 
-2026年10月23日的验证结果为 **152 项测试通过**，另已跑通上述真实 HTTP 演示。环境、方法和范围见 [验证记录](docs/verification.md)。这些是功能与回归验证，不是性能测试或生产可用性结论。
+2026年10月23日本轮完整回归为 **167 项测试通过**，另已跑通上述真实 HTTP 演示，并核对每个响应的请求编号和缓存头。环境、方法和范围见 [验证记录](docs/verification.md)。这些是功能与回归验证，不是性能测试或生产可用性结论。
 
 ## 阅读与后续顺序
 

@@ -5,6 +5,8 @@ import sqlite3
 from flask import current_app, g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
+from .observability import logged_path
+
 
 class ApiError(Exception):
     def __init__(self, status, code, message):
@@ -47,12 +49,13 @@ def handle_internal_error(error):
         try:
             connection.rollback()
         except sqlite3.Error:
-            current_app.logger.exception("Database rollback failed")
+            current_app.logger.exception("Database rollback failed request_id=%s", g.request_id)
     user = g.get("user")
     current_app.logger.error(
-        "Request failed method=%s path=%s user_id=%s",
+        "Request failed request_id=%s method=%s path=%r user_id=%s",
+        g.request_id,
         request.method,
-        request.path,
+        logged_path(),
         user["id"] if user is not None else None,
         exc_info=(type(error), error, error.__traceback__),
     )

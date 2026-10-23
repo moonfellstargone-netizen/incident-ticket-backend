@@ -26,6 +26,7 @@ instance/
 .coverage
 .coverage.*
 htmlcov/
+test-results/
 logs/
 *.log
 

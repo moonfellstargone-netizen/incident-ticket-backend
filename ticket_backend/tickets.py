@@ -165,7 +165,8 @@ def update_ticket_status(ticket_id):
 
     # Log only after the transaction commits; omit the submitted text.
     current_app.logger.info(
-        "Ticket status changed ticket_id=%s actor_id=%s old_status=%s new_status=%s",
+        "Ticket status changed request_id=%s ticket_id=%s actor_id=%s old_status=%s new_status=%s",
+        g.request_id,
         ticket_id,
         g.user["id"],
         old_status,

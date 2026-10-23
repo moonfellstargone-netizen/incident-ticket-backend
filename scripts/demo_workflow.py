@@ -75,6 +75,7 @@ class Browser:
         self.opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
         self.csrf_token = None
         self.request_counter = request_counter
+        self.request_ids = set()
 
     def request(self, method, path, payload=None, *, expected=200, csrf=True, error=None):
         headers = {"Accept": "application/json"}
@@ -95,9 +96,16 @@ class Browser:
         with response:
             status = response.status
             content_type = response.headers.get_content_type()
+            request_id = response.headers.get("X-Request-ID", "")
+            cache_control = response.headers.get("Cache-Control", "")
             content = response.read()
         require(status == expected, f"{method} {path}: expected HTTP {expected}, received {status}.")
         require(content_type == "application/json", f"{method} {path}: response was not JSON.")
+        require(len(request_id) == 32 and all(char in "0123456789abcdef" for char in request_id),
+                f"{method} {path}: missing server-generated request id.")
+        require(request_id not in self.request_ids, f"{method} {path}: request id was reused.")
+        self.request_ids.add(request_id)
+        require(cache_control == "no-store", f"{method} {path}: response allowed caching.")
         try:
             body = json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -290,7 +298,11 @@ def run_workflow(database):
         verify_list(restarted_client.request("GET", "/tickets"), [final])
     require(ticket_snapshot(database) == [final], "The restart check changed the final result.")
     checks.append("fresh_app_and_server_reopen_existing_sqlite_without_reinitialization")
-    return {"checks": checks, "http_requests": request_counter[0]}
+    return {
+        "checks": checks,
+        "http_requests": request_counter[0],
+        "response_headers": {"request_id": "verified per response", "cache_control": "no-store"},
+    }
 
 
 def main():
