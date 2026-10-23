@@ -1,4 +1,4 @@
-"""One explicitly requested model call through the real ticket-answer route."""
+"""Explicit model checks through the real ticket-answer route, without retries."""
 
 import argparse
 import json
@@ -18,7 +18,12 @@ from ticket_backend.errors import ApiError  # noqa: E402
 from ticket_backend.model_service import _api_key  # noqa: E402
 
 
-def check_connection(app):
+SUITE_CASE_IDS = ("K01", "K02", "K03", "N01", "N02", "N04")
+DRIVER = "Flask test client to local application; provider HTTP enabled"
+SCOPE = "Response and original-source checks only; answer meaning requires human review."
+
+
+def _prepare_check(app):
     with app.app_context():
         _api_key()  # Preflight only; never print or return the key.
     password = secrets.token_urlsafe(24)
@@ -41,18 +46,44 @@ def check_connection(app):
     )
     require(created.status_code == 201, "Local simulated ticket creation failed.")
     handler, token = login("handler")
-    ticket_id = created.get_json()["data"]["id"]
+    return handler, token, created.get_json()["data"]["id"]
+
+
+def _source_checks(handler, sources):
+    checks = []
+    for source in sources:
+        response = handler.get(f"/knowledge/documents/{source['document_id']}")
+        body = response.get_json()
+        original = body.get("data") if isinstance(body, dict) else None
+        available = response.status_code == 200 and isinstance(original, dict)
+        excerpt = ("\n".join(original["content"].splitlines()[source["start_line"] - 1:source["end_line"]])
+                   if available else None)
+        checks.append({
+            "document_id": source["document_id"], "slug": source["slug"],
+            "start_line": source["start_line"], "end_line": source["end_line"],
+            "original_available": available,
+            "checksum_matches": available and source["checksum"] == original["checksum"],
+            "slug_matches": available and source["slug"] == original["slug"],
+            "excerpt_matches": available and source["excerpt"] == excerpt,
+        })
+    return checks
+
+
+def _check_case(handler, token, ticket_id, question, expected_slugs=None):
     # Exactly one invocation; failures and refusals are never automatically retried.
     response = handler.post(
         f"/tickets/{ticket_id}/answer",
-        json={"question": "Nginx 502 upstream Connection refused"},
+        json={"question": question},
         headers={"X-CSRF-Token": token},
     )
     report = {
         "status": "failed", "http_status": response.status_code,
         "request_id": response.headers.get("X-Request-ID"),
-        "driver": "Flask test client to local application; provider HTTP enabled",
+        "driver": DRIVER,
         "maximum_provider_attempts": 1,
+        "question": question,
+        "semantic_review": "pending manual review",
+        "scope": SCOPE,
     }
     body = response.get_json()
     if response.status_code != 200:
@@ -60,25 +91,89 @@ def check_connection(app):
         return report
     result = body["data"]
     report["result"] = result
+    report["source_checks"] = _source_checks(handler, result["sources"])
+    checked = all(
+        check["original_available"] and check["checksum_matches"]
+        and check["slug_matches"] and check["excerpt_matches"]
+        for check in report["source_checks"]
+    )
+    if not checked:
+        report["error"] = {"code": "SOURCE_CHECK_FAILED", "message": "Returned sources did not match original documents."}
+        return report
+    if expected_slugs == []:
+        report["checks"] = {
+            "insufficient_evidence": result["status"] == "insufficient_evidence",
+            "model_not_called": result.get("model_called") is False,
+            "empty_answer": result.get("answer") is None,
+            "empty_sources": result["sources"] == [],
+        }
+        if all(report["checks"].values()):
+            report["status"] = "passed"
+        else:
+            report["error"] = {"code": "UNANSWERABLE_CASE_FAILED", "message": "An unanswerable case must return no answer or sources without calling the provider."}
+        return report
     if result.get("model_called") is not True or result["status"] != "answered":
         report["status"] = "needs_review"
         return report
-    for source in result["sources"]:
-        original = handler.get(f"/knowledge/documents/{source['document_id']}").get_json()["data"]
-        excerpt = "\n".join(original["content"].splitlines()[source["start_line"] - 1:source["end_line"]])
-        require(source["checksum"] == original["checksum"] and source["excerpt"] == excerpt,
-                "Returned source could not be checked against the original.")
+    if expected_slugs is not None:
+        actual_slugs = {source["slug"] for source in result["sources"]}
+        report["checks"] = {"expected_sources_present": set(expected_slugs) <= actual_slugs}
+        if not report["checks"]["expected_sources_present"]:
+            report["error"] = {"code": "EXPECTED_SOURCE_MISSING", "message": "The answer did not cite all expected source documents."}
+            return report
     report["status"] = "passed"
-    report["scope"] = "One response and source check; answer meaning still requires human review."
+    return report
+
+
+def check_connection(app):
+    handler, token, ticket_id = _prepare_check(app)
+    return _check_case(handler, token, ticket_id, "Nginx 502 upstream Connection refused")
+
+
+def _suite_cases():
+    examples = json.loads((REPOSITORY / "examples" / "knowledge_questions.json").read_text(encoding="utf-8"))
+    by_id = {case["id"]: case for case in examples}
+    require(len(by_id) == len(examples), "Development case ids must be unique.")
+    require(all(case_id in by_id for case_id in SUITE_CASE_IDS), "A fixed development case is missing.")
+    return [by_id[case_id] for case_id in SUITE_CASE_IDS]
+
+
+def check_suite(app):
+    cases = _suite_cases()
+    handler, token, ticket_id = _prepare_check(app)
+    report = {
+        "status": "passed", "mode": "suite", "driver": DRIVER,
+        "dataset": "Six fixed development cases from examples/knowledge_questions.json; not a held-out accuracy evaluation.",
+        "planned_case_ids": list(SUITE_CASE_IDS),
+        "maximum_provider_attempts": len(cases),
+        "expected_provider_calls": sum(bool(case["expected_slugs"]) for case in cases),
+        "semantic_review": "pending manual review", "scope": SCOPE,
+        "cases": [], "stopped_early": False,
+    }
+    for case in cases:
+        result = _check_case(handler, token, ticket_id, case["question"], case["expected_slugs"])
+        result.update(case_id=case["id"], expected_slugs=case["expected_slugs"])
+        report["cases"].append(result)
+        if result["status"] != "passed":
+            report["status"] = result["status"]
+            report["stopped_early"] = len(report["cases"]) < len(cases)
+            report["stopped_after_case"] = case["id"]
+            break
+    report["executed_cases"] = len(report["cases"])
+    report["reported_model_calls"] = sum(
+        case.get("result", {}).get("model_called") is True for case in report["cases"]
+    )
+    report["call_count_scope"] = "reported_model_calls counts successful API responses marked model_called; failed requests may also consume a provider attempt and budget."
     return report
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="Allow one billable call within the existing CNY 10 budget.")
+    parser.add_argument("--live", action="store_true", help="Allow billable model requests within the existing CNY 10 budget.")
+    parser.add_argument("--suite", action="store_true", help="Run six fixed development cases; at most six provider attempts, normally three. Requires --live.")
     arguments = parser.parse_args(argv)
     if not arguments.live:
-        parser.error("Pass --live explicitly to allow one billable model request.")
+        parser.error("Pass --live explicitly to allow billable model requests.")
     base = (REPOSITORY / "tests" / ".pytest-tmp").resolve()
     require(base.is_relative_to(REPOSITORY), "Temporary data must remain inside the repository.")
     base.mkdir(parents=True, exist_ok=True)
@@ -94,7 +189,7 @@ def main(argv=None):
         # The default persistent usage ledger is intentionally retained. Only
         # this newly created business database is temporary, never the budget.
         try:
-            report = check_connection(app)
+            report = check_suite(app) if arguments.suite else check_connection(app)
         except ApiError as error:
             report = {"status": "failed", "error": {"code": error.code, "message": error.message}}
         except DemoFailure as error:
@@ -107,7 +202,7 @@ def main(argv=None):
     report["report_file"] = str(report_path)
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     report_path.write_text(encoded + "\n", encoding="utf-8")
-    print(encoded)
+    print(json.dumps(report, ensure_ascii=True, indent=2))
     return 0 if report["status"] == "passed" else 1
 
 

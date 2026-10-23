@@ -63,3 +63,11 @@
 修复后固定18题全部符合预期，12次来源核对通过。这个问题集参与了开发调整，结果只作为开发回归证据，不能包装为独立测试准确率。实现仍是小语料词法基线，同义表达或混合主题仍可能漏检或误匹配。
 
 重现入口为 `scripts/evaluate_knowledge.py` 和 `tests/test_knowledge.py`；具体运行方法见[知识模块说明](knowledge.md)。这项是实际开发发现，不是生产事故，也未经过真实模型生成。
+
+## 模型 HTTP 中断的错误分类与账本收尾
+
+真实模型首次接通后，检查异常路径发现：原实现只捕获 `TimeoutError`、`URLError` 和 `OSError`。模拟连接阶段的 `BadStatusLine` 或读取阶段的 `IncompleteRead` 时，异常逃逸至通用500处理器，已经预占的调用记录仍为 reserved。这两类异常继承 `http.client.HTTPException`，不属于原捕获范围；该故障是本地人为注入，首次真实请求本身成功。
+
+修复在外部 HTTP 调用边界补充捕获，返回502 `MODEL_UPSTREAM_ERROR`，把记录收尾为 failed，并保留0.5元预占，不自动重试。不会把异常携带的响应片段写入日志或返回给调用方。另将提供方401和402分别映射为认证失败与余额不足，避免只提示稍后重试。
+
+`tests/test_model_answer.py` 的 `test_interrupted_provider_http_is_safe_and_finishes_budget_record` 分别在打开连接、读取响应时注入异常，核对错误码、账本、调用一次，以及日志和响应不含假密钥及问题。与提供方错误分类用例的专项验证为 `9 passed, 44 deselected in 2.49s`，未调用外部模型。

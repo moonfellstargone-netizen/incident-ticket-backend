@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from http.client import BadStatusLine, IncompleteRead
 from io import BytesIO
 import json
 from pathlib import Path
@@ -396,7 +397,9 @@ def test_invalid_provider_envelopes_return_safe_errors_and_keep_reservation(
 @pytest.mark.parametrize(("failure", "status", "code"), [
     ("timeout", 504, "MODEL_TIMEOUT"), ("url-error", 504, "MODEL_TIMEOUT"),
     (429, 503, "MODEL_UNAVAILABLE"), (500, 503, "MODEL_UNAVAILABLE"),
-    (401, 502, "MODEL_UPSTREAM_ERROR"),
+    (401, 503, "MODEL_AUTH_FAILED"),
+    (402, 503, "MODEL_BALANCE_INSUFFICIENT"),
+    (422, 502, "MODEL_UPSTREAM_ERROR"),
 ])
 def test_provider_failures_are_safe_not_retried_and_reservations_are_retained(
     model_case, transport, assert_error, caplog, failure, status, code,
@@ -420,6 +423,30 @@ def test_provider_failures_are_safe_not_retried_and_reservations_are_retained(
     assert row["status"] == "failed" and row["reserved_micros"] == 500_000
     assert_error(post_answer(model_case), 429, "MODEL_BUDGET_EXHAUSTED")
     assert len(ledger_rows(app)) == 1
+    assert transport.call_count == 1
+
+
+@pytest.mark.parametrize("stage", ["open", "read"])
+def test_interrupted_provider_http_is_safe_and_finishes_budget_record(
+    model_case, transport, assert_error, caplog, stage,
+):
+    private_detail = FAKE_KEY + " " + QUESTION
+    if stage == "open":
+        transport.side_effect = BadStatusLine(private_detail)
+    else:
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.side_effect = IncompleteRead(private_detail.encode(), 100)
+        transport.side_effect = None
+        transport.return_value = response
+    response = post_answer(model_case)
+    assert_error(response, 502, "MODEL_UPSTREAM_ERROR")
+    assert FAKE_KEY not in response.get_data(as_text=True) + caplog.text
+    assert QUESTION not in response.get_data(as_text=True) + caplog.text
+    row, = ledger_rows(model_case[0])
+    assert row["status"] == "failed" and row["reserved_micros"] == 500_000
+    assert row["prompt_tokens"] is None and row["estimated_cost_micros"] is None
     assert transport.call_count == 1
 
 

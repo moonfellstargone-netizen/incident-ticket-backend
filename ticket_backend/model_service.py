@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
@@ -203,11 +204,19 @@ def generate_answer(question, sources):
         status = error.code
         error.close()
         _finish_call(call_id, "failed")
-        code = "MODEL_UNAVAILABLE" if status == 429 or status >= 500 else "MODEL_UPSTREAM_ERROR"
-        raise ApiError(503 if code == "MODEL_UNAVAILABLE" else 502, code, "模型服务暂不可用，请稍后重试。") from None
+        if status == 401:
+            raise ApiError(503, "MODEL_AUTH_FAILED", "模型服务认证失败，请检查本地密钥配置。") from None
+        if status == 402:
+            raise ApiError(503, "MODEL_BALANCE_INSUFFICIENT", "模型账户余额不足，请到提供方平台核对余额。") from None
+        if status == 429 or status >= 500:
+            raise ApiError(503, "MODEL_UNAVAILABLE", "模型服务暂不可用，请稍后重试。") from None
+        raise ApiError(502, "MODEL_UPSTREAM_ERROR", "模型服务拒绝了请求，请检查接口配置。") from None
     except (TimeoutError, URLError, OSError):
         _finish_call(call_id, "failed")
         raise ApiError(504, "MODEL_TIMEOUT", "模型连接失败或超时，请使用检索原文继续排查。") from None
+    except HTTPException:
+        _finish_call(call_id, "failed")
+        raise ApiError(502, "MODEL_UPSTREAM_ERROR", "模型响应传输中断，请使用检索原文继续排查。") from None
     if len(raw) > MAX_RESPONSE_BYTES:
         _finish_call(call_id, "invalid")
         raise ApiError(502, "MODEL_INVALID_ANSWER", "模型响应过大，未采用回答。")
