@@ -1,28 +1,26 @@
-# 故障工单后端与自动化验证
+# 故障工单与知识检索系统
 
-基于 Python、Flask、SQLite 和 pytest 的后端演示项目，使用模拟工单和示例故障文档。
+基于 Python、Flask、SQLite 和 pytest 的个人后端项目，使用模拟工单和自编故障文档，覆盖工单处理、接口测试与知识检索。
+
+[GitHub 仓库](https://github.com/moonfellstargone-netizen/incident-ticket-backend) · [使用说明](使用说明.txt)
+
+使用压缩包时，先完整解压到本地目录，再按使用说明准备环境和运行。
 
 ## 功能
 
 - 工单创建、分页查询、状态筛选、处理结果与状态历史。
 - 提单人与处理人权限隔离，会话登录和 CSRF 校验。
 - 状态按 `pending → in_progress → resolved` 推进，条件更新防止覆盖，失败时事务回滚。
-- Markdown 文档导入、工单关联检索与带来源的 DeepSeek 辅助回答；无资料不调用模型。
+- Markdown 文档导入、工单关联检索与带来源的 DeepSeek 辅助回答；无资料时提示无法回答。
 
 ## 运行
 
 在项目根目录打开 PowerShell。已验证环境：Windows、Python 3.13.9、Flask 3.1.2、SQLite 3.51.0。
 
-先指定已有的 Python 解释器，例如：
+首次运行，创建虚拟环境并安装依赖。没有 `py` 命令时，可用本机 Python 解释器创建虚拟环境，具体方法见[使用说明](使用说明.txt)。
 
 ```powershell
-$python = Join-Path $env:LOCALAPPDATA 'anaconda3\python.exe'
-```
-
-首次准备环境时，可用选定的解释器创建虚拟环境并安装依赖：
-
-```powershell
-& $python -m venv .venv
+py -3 -m venv .venv
 $python = Join-Path (Get-Location) '.venv\Scripts\python.exe'
 & $python -m pip install -r requirements-dev.txt
 ```
@@ -48,13 +46,10 @@ $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 & $python scripts/demo_workflow.py
 ```
 
-运行自动化测试；每次使用新的临时目录：
+运行自动化测试，使用独立的临时目录：
 
 ```powershell
-$runId = [guid]::NewGuid().ToString('N')
-$testTemp = Join-Path (Get-Location) ('tests\.pytest-tmp\run-' + $runId)
-$testReport = Join-Path (Get-Location) ('test-results\pytest-' + $runId + '.xml')
-& $python -m pytest -q --basetemp $testTemp --junitxml $testReport
+& $python -m pytest -q --basetemp ("tests/.pytest-tmp/run-" + [guid]::NewGuid().ToString('N'))
 ```
 
 最近验证（2026-10-23）：334项测试通过；HTTP 演示42次请求、17组检查通过；检索18题通过；模型接口6个固定样例通过。结果与方法见[验证记录](docs/verification.md)。
@@ -66,4 +61,4 @@ $testReport = Join-Path (Get-Location) ('test-results\pytest-' + $runId + '.xml'
 - [测试设计](docs/testing-guide.md)与[问题排查](docs/troubleshooting.md)
 - [简历描述与演示顺序](docs/job-presentation.md)
 
-项目面向本机演示。检索采用词法匹配；固定样例用于开发回归，不作为通用准确率。密钥、数据库和本地报告均不提交仓库。
+项目用于本机演示，检索采用词法匹配。固定样例用于回归验证，密钥、数据库和本地报告不包含在仓库与压缩包中。

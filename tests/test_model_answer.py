@@ -6,6 +6,7 @@ from http.client import BadStatusLine, IncompleteRead
 from io import BytesIO
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 from threading import Barrier
@@ -137,9 +138,16 @@ def test_test_apps_refuse_development_budget_ledger(tmp_path):
 def test_default_key_file_is_excluded_by_git(tmp_path):
     app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "tickets.sqlite3"), "SECRET_KEY": TEST_SECRET})
     assert Path(app.config["MODEL_KEY_FILE"]) == ROOT / "instance" / "deepseek_api_key.txt"
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("Git is required only to verify ignore rules.")
+    repository = tmp_path / "ignore-check"
+    repository.mkdir()
+    shutil.copyfile(ROOT / ".gitignore", repository / ".gitignore")
+    subprocess.run([git, "init", "--quiet", str(repository)], capture_output=True, check=True)
     result = subprocess.run(
-        ["git", "check-ignore", "--no-index", "instance/deepseek_api_key.txt"],
-        cwd=ROOT, capture_output=True, text=True, check=False,
+        [git, "check-ignore", "--no-index", "instance/deepseek_api_key.txt"],
+        cwd=repository, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0
 

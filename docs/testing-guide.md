@@ -2,6 +2,8 @@
 
 测试使用模拟账号、工单和故障文档，最新结果见[验证记录](verification.md)，运行命令见 [README](../README.md)。
 
+需要 XML 报告时，在 pytest 命令后追加 `--junitxml test-results/pytest.xml`。密钥忽略规则检查需要 Git，未安装时仅跳过这一项。
+
 ## 用例范围
 
 - 业务流程：创建、查询、筛选、分页、状态推进、处理结果与历史。

@@ -1,0 +1,39 @@
+故障工单与知识检索系统
+
+这是 Python 源码运行包。使用模拟账号、工单和故障文档，需要本地 Python 及依赖，无需公网服务器。
+
+一、已有环境：快速演示
+
+解压后，在包含 README.md 的目录打开 PowerShell，指定本地 Python 路径。
+本机 Anaconda 可使用：
+
+$python = Join-Path $env:LOCALAPPDATA 'anaconda3\python.exe'
+& $python scripts/demo_workflow.py
+
+脚本自动准备临时数据并完成工单流程，成功显示 status: passed，共42次本机请求、17组检查。不需要先启动服务，也不调用付费模型。
+
+二、新电脑：准备依赖
+
+使用可用的 Python 解释器创建环境。安装了 Python 启动器时：
+
+py -3 -m venv .venv
+$python = Join-Path (Get-Location) '.venv\Scripts\python.exe'
+& $python -m pip install -r requirements-dev.txt
+& $python scripts/demo_workflow.py
+
+没有 py 命令时，先将 $python 设为实际解释器路径，执行 & $python -m venv .venv，再使用上面的虚拟环境解释器。
+已验证环境为 Windows、Python 3.13.9、Flask 3.1.2、SQLite 3.51.0。
+
+三、启动服务和手动调用
+
+按 README.md 中的“运行”步骤初始化数据库、设置演示密码、启动 Flask。
+模拟账号：submitter_a、submitter_b、handler。接口和请求示例见 docs/first-step.md。
+服务通过接口演示，没有网页首页。
+
+四、测试与模型
+
+测试命令见 README.md，测试设计见 docs/testing-guide.md。
+外部模型默认关闭，压缩包不含密钥；本地检索和工单流程可以直接演示。
+需要模型回答时，按 docs/knowledge.md 配置自己的 DeepSeek 密钥，显式调用可能计费。
+
+项目地址：https://github.com/moonfellstargone-netizen/incident-ticket-backend
