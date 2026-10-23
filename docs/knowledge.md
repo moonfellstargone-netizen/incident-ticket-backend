@@ -62,6 +62,18 @@ $retrievalReport = Join-Path (Get-Location) ('test-results\retrieval-' + [guid]:
 
 它只向被 Git 忽略的 `instance/deepseek_api_key.txt` 保存密钥，不覆盖已存在文件，不启用模型、不发起调用。也可由本地环境变量 `DEEPSEEK_API_KEY` 提供，环境变量优先；不要把密钥写入启动命令参数或提交仓库。
 
+首次接通可直接运行单次检查，不需要先初始化开发库、启动 Flask 或手动登录：
+
+```powershell
+& $python scripts/check_model.py --live
+```
+
+`--live` 显式允许一次可能计费的请求。脚本准备自己的临时业务数据库、模拟账号和资料，经 Flask 测试客户端调用实际业务接口，再由后端向 DeepSeek 发起真实 HTTP；最多请求一次，不自动重试，沿用原持久预算账本。它不会使用或重置开发工单库，也不会因为重建临时库重新获得20次额度。
+
+结果保存到被 Git 忽略的 `test-results/live-model-*.json`。`status: passed` 表示本次得到带有效来源的回答，并核对了原文；回答含义仍需人工审核。`needs_review` 表示未得到可采用的回答；失败时查看 `error.code`，不要只看 HTTP 状态。未加 `--live` 会直接退出，不发请求。当前脚本仅通过6项模拟传输测试，尚未执行真实付费验证。
+
+若出现 `MODEL_NOT_CONFIGURED`，检查是否保存了密钥，或是否存在优先级更高的空／旧 `DEEPSEEK_API_KEY` 环境变量；`MODEL_UPSTREAM_ERROR` 需要到官方平台核对密钥和 API 账户余额，当前接口不细分提供方401和402。`MODEL_TIMEOUT` 时先排查连接，不无限重试；`MODEL_BUDGET_EXHAUSTED` 时保留账本，核对已用额度。
+
 确认准备好真实验证后，在按 README 配置好 Flask 的同一终端显式开启：
 
 ```powershell

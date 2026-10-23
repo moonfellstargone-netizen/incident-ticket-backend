@@ -79,6 +79,8 @@ $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 
 默认未启用模型：有资料时返回 `model_disabled` 和来源，无足够资料时返回 `insufficient_evidence`；两种情况均不调用外部服务。可选 DeepSeek `deepseek-flash` 接口已实现，配置和预算控制见[知识模块说明](docs/knowledge.md)。本轮已确认外部调用预算不超过10元，但尚未配置真实密钥，**实际外部模型调用0次、费用0元**。模拟测试通过不等于真实模型效果已验收。
 
+首次接通可先运行 `scripts/configure_model.py` 隐藏保存密钥，再显式执行 `scripts/check_model.py --live` 做一次检查；它自行准备模拟数据，复用持久预算，不需要先启动服务。具体步骤及失败排查见[知识模块说明](docs/knowledge.md)。现有 `demo_workflow.py` 始终关闭模型，不能用它代替真实模型接通检查。
+
 ## 一键演示完整流程
 
 在项目根目录使用上述解释器即可运行，无需先启动服务或准备账号：
