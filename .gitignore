@@ -8,6 +8,7 @@ venv/
 .env
 .env.*
 !.env.example
+/deepseek_api.txt
 
 # Local databases and SQLite sidecar files
 instance/

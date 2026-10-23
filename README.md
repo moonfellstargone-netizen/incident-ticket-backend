@@ -77,9 +77,9 @@ $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 - `GET /tickets/<id>/knowledge`：用可见工单的标题和描述检索参考资料，最多使用前500个字符，并报告是否截断。
 - `POST /tickets/<id>/answer`：处理人携带 CSRF 提交 `{"question":"Nginx 502 upstream Connection refused"}`，先检索再决定是否请求模型；不会自动修改工单或处理结果。
 
-默认未启用模型：有资料时返回 `model_disabled` 和来源，无足够资料时返回 `insufficient_evidence`；两种情况均不调用外部服务。可选 DeepSeek `deepseek-flash` 接口已实现，配置和预算控制见[知识模块说明](docs/knowledge.md)。本轮已确认外部调用预算不超过10元，但尚未配置真实密钥，**实际外部模型调用0次、费用0元**。模拟测试通过不等于真实模型效果已验收。
+默认未启用模型：有资料时返回 `model_disabled` 和来源，无足够资料时返回 `insufficient_evidence`；两种情况均不调用外部服务。可选 DeepSeek `deepseek-flash` 接口已实现，配置和预算控制见[知识模块说明](docs/knowledge.md)。本轮已确认外部调用预算不超过10元，本地密钥已保存并通过格式及应用读取检查，**实际外部模型调用0次、费用0元**。本地配置成功及模拟测试通过不等于提供方密钥有效或真实模型效果已验收。
 
-首次接通可先运行 `scripts/configure_model.py` 隐藏保存密钥，再显式执行 `scripts/check_model.py --live` 做一次检查；它自行准备模拟数据，复用持久预算，不需要先启动服务。具体步骤及失败排查见[知识模块说明](docs/knowledge.md)。现有 `demo_workflow.py` 始终关闭模型，不能用它代替真实模型接通检查。
+首次接通可运行 `scripts/configure_model.py --from-file deepseek_api.txt` 从本地 UTF-8 文件保存密钥，也可使用无参数的隐藏输入方式，再显式执行 `scripts/check_model.py --live` 做一次检查；它自行准备模拟数据，复用持久预算，不需要先启动服务。具体步骤及失败排查见[知识模块说明](docs/knowledge.md)。现有 `demo_workflow.py` 始终关闭模型，不能用它代替真实模型接通检查。
 
 ## 一键演示完整流程
 
