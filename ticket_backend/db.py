@@ -33,8 +33,9 @@ def close_db(error=None):
 
 def init_db():
     Path(current_app.config["DATABASE"]).parent.mkdir(parents=True, exist_ok=True)
-    with current_app.open_resource("schema.sql") as schema:
-        get_db().executescript(schema.read().decode("utf-8"))
+    for resource in ("schema.sql", "knowledge_schema.sql"):
+        with current_app.open_resource(resource) as schema:
+            get_db().executescript(schema.read().decode("utf-8"))
 
 
 def seed_demo_users(password):

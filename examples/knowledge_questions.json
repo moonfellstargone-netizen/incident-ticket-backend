@@ -1,0 +1,20 @@
+[
+  {"id":"K01","question":"SQLITE_BUSY database is locked","expected_slugs":["sqlite-locked"]},
+  {"id":"K02","question":"登录后 CSRF_FAILED 使用旧令牌怎么办","expected_slugs":["csrf-token"]},
+  {"id":"K03","question":"Nginx 502 upstream Connection refused","expected_slugs":["http-502"]},
+  {"id":"K04","question":"INVALID_REQUEST title description 字段类型","expected_slugs":["json-validation"]},
+  {"id":"K05","question":"Markdown UnicodeDecodeError GBK UTF-8","expected_slugs":["markdown-utf8"]},
+  {"id":"K06","question":"DeepSeek 模型调用超时保留原文检索","expected_slugs":["model-timeout"]},
+  {"id":"K07","question":"登录后仍然拿旧令牌创建工单，怎样核对Cookie会话","expected_slugs":["csrf-token"]},
+  {"id":"K08","question":"SQLite 两个连接竞争写事务时为什么被锁住","expected_slugs":["sqlite-locked"]},
+  {"id":"K09","question":"文档编码是GBK，导入时按UTF-8读取失败","expected_slugs":["markdown-utf8"]},
+  {"id":"K10","question":"创建工单时title字段写成数字，应该检查什么","expected_slugs":["json-validation"]},
+  {"id":"K11","question":"上游应用端口没有监听导致连接被拒绝","expected_slugs":["http-502"]},
+  {"id":"K12","question":"模型调用连接超时，还能查看哪些本地资料","expected_slugs":["model-timeout"]},
+  {"id":"N01","question":"火星基地氧气传感器如何校准","expected_slugs":[]},
+  {"id":"N02","question":"Nginx HTTP 503 upstream unavailable","expected_slugs":[]},
+  {"id":"N03","question":"CSRF_UNKNOWN 登录后如何修复","expected_slugs":[]},
+  {"id":"N04","question":"HTTP 502 如何修复硬盘坏道","expected_slugs":[]},
+  {"id":"N05","question":"PostgreSQL 主从复制延迟怎么处理","expected_slugs":[]},
+  {"id":"N06","question":"Windows 蓝屏 MEMORY_MANAGEMENT 怎么排查","expected_slugs":[]}
+]

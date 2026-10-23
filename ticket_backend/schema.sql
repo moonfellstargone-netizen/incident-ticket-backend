@@ -22,3 +22,21 @@ CREATE TABLE IF NOT EXISTS tickets (
         (status != 'resolved' AND resolution IS NULL AND resolved_by IS NULL)
     )
 );
+
+-- Record only observed status changes; existing tickets are not backfilled.
+CREATE TABLE IF NOT EXISTS ticket_history (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+    actor_id INTEGER NOT NULL REFERENCES users(id),
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK (
+        (from_status = 'pending' AND to_status = 'in_progress')
+        OR (from_status = 'in_progress' AND to_status = 'resolved')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ticket_history_ticket_id_id
+    ON ticket_history (ticket_id, id);

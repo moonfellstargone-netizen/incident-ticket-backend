@@ -6,6 +6,7 @@ No development database, external service, or additional dependency is used.
 
 from contextlib import closing, contextmanager
 from http.cookiejar import CookieJar
+import hashlib
 from importlib.metadata import version
 import json
 from pathlib import Path
@@ -76,6 +77,7 @@ class Browser:
         self.csrf_token = None
         self.request_counter = request_counter
         self.request_ids = set()
+        self.last_request_id = None
 
     def request(self, method, path, payload=None, *, expected=200, csrf=True, error=None):
         headers = {"Accept": "application/json"}
@@ -105,6 +107,7 @@ class Browser:
                 f"{method} {path}: missing server-generated request id.")
         require(request_id not in self.request_ids, f"{method} {path}: request id was reused.")
         self.request_ids.add(request_id)
+        self.last_request_id = request_id
         require(cache_control == "no-store", f"{method} {path}: response allowed caching.")
         try:
             body = json.loads(content)
@@ -184,6 +187,21 @@ def verify_cli_setup(app, database, password):
     require(users == [("handler", "handler"), ("submitter_a", "submitter"),
                       ("submitter_b", "submitter")], "CLI setup did not create the three demo accounts.")
     require(ticket_snapshot(database) == [], "The isolated database was not initially empty.")
+    directory = str(REPOSITORY / "examples" / "knowledge")
+    imported = runner.invoke(args=["import-knowledge", directory])
+    repeated = runner.invoke(args=["import-knowledge", directory])
+    require(imported.exit_code == repeated.exit_code == 0, "Knowledge import CLI failed.")
+    require("created=6" in imported.output and "unchanged=6" in repeated.output,
+            "Knowledge import was not repeatable.")
+
+
+def verify_source(browser, source):
+    document = browser.request("GET", f"/knowledge/documents/{source['document_id']}")
+    require(document["checksum"] == source["checksum"]
+            == hashlib.sha256(document["content"].encode("utf-8")).hexdigest(),
+            "Source checksum differed from the original document.")
+    expected = "\n".join(document["content"].splitlines()[source["start_line"] - 1:source["end_line"]])
+    require(source["excerpt"] == expected, "Source lines differed from the original document.")
 
 
 def run_workflow(database):
@@ -191,15 +209,16 @@ def run_workflow(database):
         "DATABASE": str(database),
         "SECRET_KEY": secrets.token_hex(32),
         "TESTING": False,
+        "MODEL_ENABLED": False,
     }
     app = create_app(app_config)
     password = secrets.token_urlsafe(24)
     verify_cli_setup(app, database, password)
-    checks = ["real_init_db_and_seed_demo_cli"]
+    checks = ["real_init_db_and_seed_demo_cli", "knowledge_cli_import_is_idempotent"]
     request_counter = [0]
-    title = "[SIMULATED] Internal API timeout"
-    description = "[SIMULATED] A manually reported timeout; no real user or production data."
-    resolution = "[SIMULATED] Corrected the example timeout configuration and verified the request."
+    title = "[SIMULATED] SQLITE_BUSY database is locked"
+    description = "模拟故障：SQLite 两个连接写事务竞争，第二个连接提示 database is locked。"
+    resolution = "模拟处理：第一个连接结束写事务后重试，第二个连接写入成功。"
 
     with local_server(app) as base_url:
         submitter_a = Browser(base_url, request_counter)
@@ -220,12 +239,21 @@ def run_workflow(database):
         verify_list(submitter_a.request("GET", "/tickets"), [initial])
         require(submitter_a.request("GET", path) == initial, "Submitter detail differed from creation.")
         checks.append("submitter_creation_list_detail_and_persistence")
+        require(submitter_a.request("GET", path + "/history") == {"items": [], "total": 0},
+                "A new ticket had fabricated status history.")
+        related = submitter_a.request("GET", path + "/knowledge")
+        require(related["status"] == "found" and related["items"]
+                and related["items"][0]["slug"] == "sqlite-locked", "Ticket knowledge lookup failed.")
+        verify_source(submitter_a, related["items"][0])
+        checks.append("ticket_linked_retrieval_with_original_lines_and_checksum")
 
         submitter_b = Browser(base_url, request_counter)
         user_b = submitter_b.login("submitter_b", password)
         require(user_b["id"] != user_a["id"], "Submitters did not have distinct identities.")
         verify_list(submitter_b.request("GET", "/tickets"), [])
         submitter_b.request("GET", path, expected=404, error="NOT_FOUND")
+        submitter_b.request("GET", path + "/history", expected=404, error="NOT_FOUND")
+        submitter_b.request("GET", path + "/knowledge", expected=404, error="NOT_FOUND")
         submitter_b.request("PATCH", status_path, {"status": "in_progress"},
                             expected=403, error="FORBIDDEN")
         require(ticket_snapshot(database) == [initial], "Denied user access changed database contents.")
@@ -237,6 +265,15 @@ def run_workflow(database):
         verify_list(handler.request("GET", "/tickets"), [initial])
         require(handler.request("GET", path) == initial, "Handler could not view the ticket.")
         checks.append("handler_sees_submitted_ticket")
+        disabled = handler.request("POST", path + "/answer", {"question": "SQLITE_BUSY database is locked"})
+        require(disabled["status"] == "model_disabled" and disabled["answer"] is None
+                and disabled["sources"] and disabled["model_called"] is False,
+                "Disabled model mode claimed a generated answer.")
+        unknown = handler.request("POST", path + "/answer", {"question": "火星基地氧气传感器如何校准"})
+        require(unknown["status"] == "insufficient_evidence" and unknown["answer"] is None
+                and unknown["sources"] == [] and unknown["model_called"] is False,
+                "An unknown question did not stop before model invocation.")
+        checks.append("disabled_model_and_insufficient_evidence_make_no_external_call")
 
         handler.request("PATCH", status_path, {"status": "in_progress"}, csrf=False,
                         expected=403, error="CSRF_FAILED")
@@ -251,6 +288,7 @@ def run_workflow(database):
         in_progress = dict(initial, status="in_progress")
         require(verify_ticket(handler.request("PATCH", status_path, {"status": "in_progress"}))
                 == in_progress, "The pending to in_progress response was incorrect.")
+        progress_request_id = handler.last_request_id
         require(ticket_snapshot(database) == [in_progress], "The in_progress state was not persisted.")
         checks.append("pending_to_in_progress")
 
@@ -263,6 +301,7 @@ def run_workflow(database):
         require(verify_ticket(handler.request(
             "PATCH", status_path, {"status": "resolved", "resolution": f"  {resolution}  "}
         )) == final, "Resolution, status, or handler identity was incorrect.")
+        resolved_request_id = handler.last_request_id
         require(ticket_snapshot(database) == [final], "Resolution was not atomically persisted.")
         checks.append("in_progress_to_resolved_with_trimmed_result_and_handler")
 
@@ -274,6 +313,16 @@ def run_workflow(database):
             handler.request("PATCH", status_path, payload, expected=409, error="INVALID_TRANSITION")
             require(ticket_snapshot(database) == [final], f"Rejected transition to {target} changed database contents.")
         checks.append("repeat_and_backward_transitions_rejected_without_mutation")
+        history = submitter_a.request("GET", path + "/history")
+        require(history["total"] == 2 and len(history["items"]) == 2,
+                "Successful transitions did not produce exactly two history records.")
+        require([(item["from_status"], item["to_status"]) for item in history["items"]]
+                == [("pending", "in_progress"), ("in_progress", "resolved")], "History order was incorrect.")
+        require([item["request_id"] for item in history["items"]]
+                == [progress_request_id, resolved_request_id], "History did not match successful request ids.")
+        require(all(item["actor_id"] == handler_user["id"] for item in history["items"]),
+                "History actor was not the current handler.")
+        checks.append("transactional_history_matches_only_successful_transitions")
 
         require(submitter_a.request("GET", path) == final, "Submitter could not read the final result.")
         verify_list(submitter_a.request("GET", "/tickets?status=resolved"), [final])
@@ -296,6 +345,10 @@ def run_workflow(database):
         require(verify_ticket(restarted_client.request("GET", path)) == final,
                 "The recreated app could not read the persisted final result.")
         verify_list(restarted_client.request("GET", "/tickets"), [final])
+        require(restarted_client.request("GET", path + "/history") == history,
+                "The recreated app lost transition history.")
+        reopened_knowledge = restarted_client.request("GET", path + "/knowledge")
+        require(reopened_knowledge["items"] == related["items"], "The recreated app lost knowledge data.")
     require(ticket_snapshot(database) == [final], "The restart check changed the final result.")
     checks.append("fresh_app_and_server_reopen_existing_sqlite_without_reinitialization")
     return {

@@ -30,6 +30,9 @@ def test_commit_failure_rolls_back_ticket_and_trigger_writes_then_recovers(
     with app.app_context():
         database = get_db()
         before = dict(database.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone())
+        history_before = [dict(row) for row in database.execute(
+            "SELECT * FROM ticket_history WHERE ticket_id = ? ORDER BY id", (ticket_id,),
+        ).fetchall()]
         # This insert succeeds inside the trigger. The foreign key is checked
         # only at COMMIT, after the UPDATE and the view's final SELECT succeed.
         database.executescript("""
@@ -62,6 +65,9 @@ def test_commit_failure_rolls_back_ticket_and_trigger_writes_then_recovers(
     with app.app_context():
         database = get_db()
         assert dict(database.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()) == before
+        assert [dict(row) for row in database.execute(
+            "SELECT * FROM ticket_history WHERE ticket_id = ? ORDER BY id", (ticket_id,),
+        ).fetchall()] == history_before
         assert database.execute("SELECT COUNT(*) FROM simulated_deferred_reference").fetchone()[0] == 0
         database.execute("DROP TRIGGER simulated_commit_failure")
         database.commit()
@@ -80,5 +86,12 @@ def test_commit_failure_rolls_back_ticket_and_trigger_writes_then_recovers(
     with app.app_context():
         database = get_db()
         assert dict(database.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()) == result
+        history_after = [dict(row) for row in database.execute(
+            "SELECT * FROM ticket_history WHERE ticket_id = ? ORDER BY id", (ticket_id,),
+        ).fetchall()]
+        assert history_after[:-1] == history_before
+        assert history_after[-1]["to_status"] == target_status
+        assert history_after[-1]["request_id"] == recovered.headers["X-Request-ID"]
+        assert all(row["request_id"] != failed.headers["X-Request-ID"] for row in history_after)
         assert database.execute("SELECT COUNT(*) FROM simulated_deferred_reference").fetchone()[0] == 0
     assert sum("Ticket status changed" in record.getMessage() for record in caplog.records) == 1

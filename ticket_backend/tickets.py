@@ -1,4 +1,4 @@
-"""Ticket creation, visibility, pagination, and one-way status changes."""
+"""Ticket creation, visibility, pagination, and transactional status history."""
 
 from flask import Blueprint, current_app, g, jsonify, request, url_for
 
@@ -10,6 +10,9 @@ from .validation import read_json_object, required_text
 bp = Blueprint("tickets", __name__, url_prefix="/tickets")
 PUBLIC_COLUMNS = (
     "id, title, description, creator_id, status, resolution, resolved_by, created_at"
+)
+HISTORY_COLUMNS = (
+    "id, ticket_id, actor_id, from_status, to_status, request_id, created_at"
 )
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _STATUSES = frozenset({"pending", "in_progress", "resolved"})
@@ -118,9 +121,8 @@ def list_tickets():
     )
 
 
-@bp.get("/<ticket_id>")
-@require_login()
-def get_ticket(ticket_id):
+def get_visible_ticket(ticket_id):
+    """Return a ticket visible to the current user; caller must require login."""
     ticket_id = _parse_ticket_id(ticket_id)
     query = f"SELECT {PUBLIC_COLUMNS} FROM tickets WHERE id = ?"
     parameters = [ticket_id]
@@ -130,7 +132,25 @@ def get_ticket(ticket_id):
     ticket = get_db().execute(query, parameters).fetchone()
     if ticket is None:
         raise ApiError(404, "NOT_FOUND", "工单不存在。")
-    return jsonify(data=dict(ticket))
+    return ticket
+
+
+@bp.get("/<ticket_id>")
+@require_login()
+def get_ticket(ticket_id):
+    return jsonify(data=dict(get_visible_ticket(ticket_id)))
+
+
+@bp.get("/<ticket_id>/history")
+@require_login()
+def get_ticket_history(ticket_id):
+    ticket = get_visible_ticket(ticket_id)
+    rows = get_db().execute(
+        f"SELECT {HISTORY_COLUMNS} FROM ticket_history WHERE ticket_id = ? ORDER BY id ASC",
+        (ticket["id"],),
+    ).fetchall()
+    # This workflow permits at most two status changes, so no pagination is needed.
+    return jsonify(data={"items": [dict(row) for row in rows], "total": len(rows)})
 
 
 @bp.patch("/<ticket_id>/status")
@@ -159,6 +179,11 @@ def update_ticket_status(ticket_id):
         )
         if cursor.rowcount != 1:
             raise ApiError(409, "INVALID_TRANSITION", "工单状态已改变，请重新查询后再操作。")
+        connection.execute(
+            "INSERT INTO ticket_history "
+            "(ticket_id, actor_id, from_status, to_status, request_id) VALUES (?, ?, ?, ?, ?)",
+            (ticket_id, g.user["id"], old_status, target_status, g.request_id),
+        )
         ticket = connection.execute(
             f"SELECT {PUBLIC_COLUMNS} FROM tickets WHERE id = ?", (ticket_id,)
         ).fetchone()

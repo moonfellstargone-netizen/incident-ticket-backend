@@ -42,6 +42,13 @@ def saved_ticket(app, ticket_id):
         return dict(row)
 
 
+def saved_history(app, ticket_id):
+    with app.app_context():
+        return [dict(row) for row in get_db().execute(
+            "SELECT * FROM ticket_history WHERE ticket_id = ? ORDER BY id", (ticket_id,),
+        ).fetchall()]
+
+
 @pytest.fixture
 def handler_client(authenticated_client):
     return authenticated_client("handler")
@@ -245,10 +252,12 @@ def test_all_forbidden_status_transitions_leave_every_field_unchanged(
             handler_client, ticket_id, "resolved", resolution="原始处理结果，禁止覆盖。"
         ).status_code == 200
     before = saved_ticket(app, ticket_id)
+    history_before = saved_history(app, ticket_id)
     fields = {"resolution": "试图覆盖处理结果。"} if target == "resolved" else {}
     response = change_status(handler_client, ticket_id, target, **fields)
     assert_error(response, 409, "INVALID_TRANSITION")
     assert saved_ticket(app, ticket_id) == before
+    assert saved_history(app, ticket_id) == history_before
 
 
 @pytest.mark.parametrize(
@@ -348,6 +357,7 @@ def test_simulated_database_update_failure_rolls_back_and_recovers(
     if target_status == "resolved":
         assert change_status(handler_client, ticket_id, "in_progress").status_code == 200
     before = saved_ticket(app, ticket_id)
+    history_before = saved_history(app, ticket_id)
     with app.app_context():
         database = get_db()
         database.execute(
@@ -371,6 +381,7 @@ def test_simulated_database_update_failure_rolls_back_and_recovers(
         assert internal_detail not in response.get_data(as_text=True)
     assert any(record.levelno >= logging.ERROR for record in caplog.records)
     assert saved_ticket(app, ticket_id) == before
+    assert saved_history(app, ticket_id) == history_before
 
     with app.app_context():
         database = get_db()
@@ -380,6 +391,9 @@ def test_simulated_database_update_failure_rolls_back_and_recovers(
     assert recovered.status_code == 200
     assert saved_ticket(app, ticket_id) == recovered.get_json()["data"]
     assert saved_ticket(app, ticket_id)["status"] == target_status
+    history_after = saved_history(app, ticket_id)
+    assert history_after[:-1] == history_before
+    assert history_after[-1]["request_id"] == recovered.headers["X-Request-ID"]
 
 
 def test_two_handlers_cannot_overwrite_each_others_resolution(
@@ -441,6 +455,11 @@ def test_two_handlers_cannot_overwrite_each_others_resolution(
         ]
         responses = [future.result(timeout=15) for future in futures]
     assert sorted(response.status_code for response in responses) == [200, 409]
+    history = saved_history(app, ticket_id)
+    assert len(history) == 2
+    assert [(row["from_status"], row["to_status"]) for row in history] == [
+        ("pending", "in_progress"), ("in_progress", "resolved"),
+    ]
     for (_, actor_id, resolution), response in zip(attempts, responses):
         if response.status_code == 200:
             result = response.get_json()["data"]
@@ -448,5 +467,8 @@ def test_two_handlers_cannot_overwrite_each_others_resolution(
             assert result["resolved_by"] == actor_id
             assert result["resolution"] == resolution
             assert saved_ticket(app, ticket_id) == result
+            assert history[-1]["actor_id"] == actor_id
+            assert history[-1]["request_id"] == response.headers["X-Request-ID"]
         else:
             assert_error(response, 409, "INVALID_TRANSITION")
+            assert all(row["request_id"] != response.headers["X-Request-ID"] for row in history)
