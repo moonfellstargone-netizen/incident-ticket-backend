@@ -49,6 +49,7 @@ $env:TICKET_DATABASE = Join-Path (Get-Location) 'instance\tickets.sqlite3'
 运行自动化测试，使用独立的临时目录：
 
 ```powershell
+New-Item -ItemType Directory -Force 'tests/.pytest-tmp' | Out-Null
 & $python -m pytest -q --basetemp ("tests/.pytest-tmp/run-" + [guid]::NewGuid().ToString('N'))
 ```
 
